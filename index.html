@@ -28,7 +28,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+     엄지와 중지를 붙이고(OK 모양) 나머지 손가락은 펴면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <button id="startBtn">카메라 켜기</button>
   <p id="err" style="color:#ff8a8a"></p>
 </div>
@@ -162,8 +162,9 @@ const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 �
 
 function processHand(lm, st) {
   const now = performance.now();
-  if (isExtended(lm, 8, 6)) st.idxAt = now;
-  if (isExtended(lm, 12, 10)) st.midAt = now;
+  const idxNow = isExtended(lm, 8, 6), midNow = isExtended(lm, 12, 10);
+  if (idxNow) st.idxAt = now;
+  if (midNow) st.midAt = now;
   const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
   const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
@@ -172,8 +173,11 @@ function processHand(lm, st) {
   // 손 크기(손목~중지 MCP)에 비례한 거리 임계값 -> 카메라 거리에 무관
   const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
   const handSize = dist(wristS, mcpS) || 1;
-  const gap = dist(idx.raw, mid.raw);
-  const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
+  // 무라사키 손모양: 엄지 끝과 중지 끝을 붙이고(OK 모양), 검지·약지·소지는 펴서 뗀다
+  const thumbS = toScreen(lm[4]);
+  const pinch = dist(thumbS, mid.raw);
+  const openCount = (idxNow ? 1 : 0) + (isExtended(lm, 16, 14) ? 1 : 0) + (isExtended(lm, 20, 18) ? 1 : 0);
+  const togetherRaw = pinch < handSize * (st.merged ? 0.5 : 0.35) && openCount >= 2;
   st.merged = togetherRaw;
   if (togetherRaw) st.togAt = now;
   const together = now - (st.togAt || -1e9) < HOLD_MS;
@@ -183,6 +187,8 @@ function processHand(lm, st) {
     st[key] = st[key] ? { x: lerp(st[key].x, p.x, sm), y: lerp(st[key].y, p.y, sm) } : { x: p.x, y: p.y };
   };
   track('idx', idx); track('mid', mid);
+  const anchorRaw = { x: (thumbS.x + mid.raw.x) / 2, y: (thumbS.y + mid.raw.y) / 2 }; // 엄지-중지 접점
+  track('anchor', anchorRaw);
   st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, 0.18);
   st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
@@ -192,7 +198,7 @@ function processHand(lm, st) {
   // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
   if (together) st.mergedAt = now;
   // 스무딩 전 좌표로 속도를 계산 (스무딩하면 속도가 작게 나옴)
-  const ax = (idx.x + mid.x) / 2, ay = (idx.y + mid.y) / 2;
+  const ax = anchorRaw.x, ay = anchorRaw.y;
   const hist = st.hist || (st.hist = []);
   hist.push({ t: now, x: ax, y: ay });
   while (hist.length && now - hist[0].t > 260) hist.shift();
@@ -331,7 +337,7 @@ function render(t) {
     const sep = 1 - m;
 
     // 합체 시 두 구체가 중점으로 모임
-    const mx = (st.idx.x + st.mid.x) / 2, my = (st.idx.y + st.mid.y) / 2;
+    const mx = st.anchor.x, my = st.anchor.y;
     const rx = lerp(st.idx.x, mx, m), ry = lerp(st.idx.y, my, m);
     const bx = lerp(st.mid.x, mx, m), by = lerp(st.mid.y, my, m);
 
