@@ -28,7 +28,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     엄지와 중지를 붙이고(OK 모양) 나머지 손가락은 펴면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <button id="startBtn">카메라 켜기</button>
   <p id="err" style="color:#ff8a8a"></p>
 </div>
@@ -173,11 +173,9 @@ function processHand(lm, st) {
   // 손 크기(손목~중지 MCP)에 비례한 거리 임계값 -> 카메라 거리에 무관
   const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
   const handSize = dist(wristS, mcpS) || 1;
-  // 무라사키 손모양: 엄지 끝과 중지 끝을 붙이고(OK 모양), 검지·약지·소지는 펴서 뗀다
-  const thumbS = toScreen(lm[4]);
-  const pinch = dist(thumbS, mid.raw);
-  const openCount = (idxNow ? 1 : 0) + (isExtended(lm, 16, 14) ? 1 : 0) + (isExtended(lm, 20, 18) ? 1 : 0);
-  const togetherRaw = pinch < handSize * (st.merged ? 0.5 : 0.35) && openCount >= 2;
+  // 무라사키: 검지와 중지를 펴서 붙인다
+  const gap = dist(idx.raw, mid.raw);
+  const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
   st.merged = togetherRaw;
   if (togetherRaw) st.togAt = now;
   const together = now - (st.togAt || -1e9) < HOLD_MS;
@@ -187,10 +185,10 @@ function processHand(lm, st) {
     st[key] = st[key] ? { x: lerp(st[key].x, p.x, sm), y: lerp(st[key].y, p.y, sm) } : { x: p.x, y: p.y };
   };
   track('idx', idx); track('mid', mid);
-  const anchorRaw = { x: (thumbS.x + mid.raw.x) / 2, y: (thumbS.y + mid.raw.y) / 2 }; // 엄지-중지 접점
+  const anchorRaw = { x: (idx.x + mid.x) / 2, y: (idx.y + mid.y) / 2 }; // 검지-중지 끝 중점
   track('anchor', anchorRaw);
-  // 무라사키 우선: 엄지-중지가 붙었거나 붙기 직전이면 아카/아오는 즉시 끄고 보라색만 보여줌
-  const suppress = together || (pinch < handSize * 0.6 && openCount >= 2);
+  // 무라사키 우선: 붙었으면 아카/아오는 즉시 끄고 보라색만 보여줌
+  const suppress = together;
   st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, together ? 0.4 : 0.18);
   st.redT = lerp(st.redT || 0, idxExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
   st.blueT = lerp(st.blueT || 0, midExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
