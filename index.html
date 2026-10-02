@@ -157,9 +157,15 @@ function isExtended(lm, tip, pip) {
   return d(w, lm[tip]) > d(w, lm[pip]) * 1.08;
 }
 
+const HOLD_MS = 180;   // 판정이 잠깐 흔들려도 이 시간 동안은 이전 상태 유지
+const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 위치에 이펙트 유지
+
 function processHand(lm, st) {
-  const idxExt = isExtended(lm, 8, 6);
-  const midExt = isExtended(lm, 12, 10);
+  const now = performance.now();
+  if (isExtended(lm, 8, 6)) st.idxAt = now;
+  if (isExtended(lm, 12, 10)) st.midAt = now;
+  const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
+  const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
   const mid = fingerTip(lm, 12, 10);
 
@@ -167,8 +173,10 @@ function processHand(lm, st) {
   const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
   const handSize = dist(wristS, mcpS) || 1;
   const gap = dist(idx.raw, mid.raw);
-  const together = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
-  st.merged = together;
+  const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
+  st.merged = togetherRaw;
+  if (togetherRaw) st.togAt = now;
+  const together = now - (st.togAt || -1e9) < HOLD_MS;
 
   const sm = 0.45; // 위치 스무딩
   const track = (key, p) => {
@@ -179,10 +187,9 @@ function processHand(lm, st) {
   st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
   st.size = handSize;
-  st.alive = 10; // 프레임 유지 카운터
+  st.seen = now;
 
   // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
-  const now = performance.now();
   if (together) st.mergedAt = now;
   // 스무딩 전 좌표로 속도를 계산 (스무딩하면 속도가 작게 나옴)
   const ax = (idx.x + mid.x) / 2, ay = (idx.y + mid.y) / 2;
@@ -306,14 +313,15 @@ function render(t) {
   ctx.save();
   if (shake > 0.5) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.86; }
   for (const st of states) {
-    if (!st.alive) continue;
-    st.alive--;
-    if (st.alive === 0) {
+    if (!st.seen) continue;
+    const nowR = performance.now();
+    if (nowR - st.seen > LOST_MS) {
       // 휘두르다가 손을 놓친 경우에도, 직전에 충분히 빨랐으면 발사
-      const now = performance.now();
-      if (st.vel && now - st.vel.t < 400 && now - (st.mergedAt || -1e9) < 800 && now > (st.cool || 0)
+      if (st.vel && nowR - st.vel.t < 700 && nowR - (st.mergedAt || -1e9) < 900 && nowR > (st.cool || 0)
           && st.vel.speed > st.size * FLICK_SPEED * 0.7) launch(st);
-      st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; continue; }
+      st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; st.seen = 0; st.wrist = null; st.hist = [];
+      continue;
+    }
     if (!st.idx) continue;
 
     const base = Math.max(14, st.size * 0.28);
@@ -358,6 +366,32 @@ function render(t) {
   ctx.restore();
 }
 
+// 손 순서가 프레임마다 바뀌어도 가장 가까운 이전 손 상태에 이어 붙이기
+let fps = 0, fpsCount = 0, fpsT = performance.now();
+function assignHands(list) {
+  const pairs = [];
+  list.forEach((lm, ci) => states.forEach((st, si) => {
+    if (st.seen && st.wrist) pairs.push({ ci, si, d: Math.hypot(lm[0].x - st.wrist.x, lm[0].y - st.wrist.y) });
+  }));
+  pairs.sort((a, b) => a.d - b.d);
+  const usedC = new Set(), usedS = new Set(), out = [];
+  for (const p of pairs) {
+    if (p.d > 0.3 || usedC.has(p.ci) || usedS.has(p.si)) continue;
+    usedC.add(p.ci); usedS.add(p.si); out.push([p.ci, p.si]);
+  }
+  list.forEach((lm, ci) => {
+    if (usedC.has(ci)) return;
+    let si = states.findIndex((st, i) => !usedS.has(i) && !st.seen);
+    if (si < 0) si = states.findIndex((st, i) => !usedS.has(i));
+    if (si < 0) return;
+    usedC.add(ci); usedS.add(si); out.push([ci, si]);
+  });
+  for (const [ci, si] of out) {
+    states[si].wrist = { x: list[ci][0].x, y: list[ci][0].y };
+    processHand(list[ci], states[si]);
+  }
+}
+
 // ---- MediaPipe ----
 let hands, running = false;
 async function start() {
@@ -373,12 +407,15 @@ async function start() {
   }
   statusEl.textContent = '손 인식 모델 로딩 중…';
   hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}` });
-  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.4 });
   hands.onResults(res => {
     const list = res.multiHandLandmarks || [];
     // 화면 x 위치 순으로 정렬해서 손 상태가 뒤바뀌지 않게
-    list.slice(0, 2).forEach((lm, i) => processHand(lm, states[i]));
-    statusEl.textContent = list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요';
+    assignHands(list.slice(0, 2));
+    fpsCount++;
+    const t = performance.now();
+    if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
+    statusEl.textContent = (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
   });
   document.getElementById('start').style.display = 'none';
   running = true;
