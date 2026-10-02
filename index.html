@@ -162,9 +162,8 @@ const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 �
 
 function processHand(lm, st) {
   const now = performance.now();
-  const idxNow = isExtended(lm, 8, 6), midNow = isExtended(lm, 12, 10);
-  if (idxNow) st.idxAt = now;
-  if (midNow) st.midAt = now;
+  if (isExtended(lm, 8, 6)) st.idxAt = now;
+  if (isExtended(lm, 12, 10)) st.midAt = now;
   const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
   const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
@@ -173,7 +172,6 @@ function processHand(lm, st) {
   // 손 크기(손목~중지 MCP)에 비례한 거리 임계값 -> 카메라 거리에 무관
   const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
   const handSize = dist(wristS, mcpS) || 1;
-  // 무라사키: 검지와 중지를 펴서 붙인다
   const gap = dist(idx.raw, mid.raw);
   const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
   st.merged = togetherRaw;
@@ -185,20 +183,16 @@ function processHand(lm, st) {
     st[key] = st[key] ? { x: lerp(st[key].x, p.x, sm), y: lerp(st[key].y, p.y, sm) } : { x: p.x, y: p.y };
   };
   track('idx', idx); track('mid', mid);
-  const anchorRaw = { x: (idx.x + mid.x) / 2, y: (idx.y + mid.y) / 2 }; // 검지-중지 끝 중점
-  track('anchor', anchorRaw);
-  // 무라사키 우선: 붙었으면 아카/아오는 즉시 끄고 보라색만 보여줌
-  const suppress = together;
-  st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, together ? 0.4 : 0.18);
-  st.redT = lerp(st.redT || 0, idxExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
-  st.blueT = lerp(st.blueT || 0, midExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
+  st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, 0.18);
+  st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
+  st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
   st.size = handSize;
   st.seen = now;
 
   // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
   if (together) st.mergedAt = now;
   // 스무딩 전 좌표로 속도를 계산 (스무딩하면 속도가 작게 나옴)
-  const ax = anchorRaw.x, ay = anchorRaw.y;
+  const ax = (idx.x + mid.x) / 2, ay = (idx.y + mid.y) / 2;
   const hist = st.hist || (st.hist = []);
   hist.push({ t: now, x: ax, y: ay });
   while (hist.length && now - hist[0].t > 260) hist.shift();
@@ -337,7 +331,7 @@ function render(t) {
     const sep = 1 - m;
 
     // 합체 시 두 구체가 중점으로 모임
-    const mx = st.anchor.x, my = st.anchor.y;
+    const mx = (st.idx.x + st.mid.x) / 2, my = (st.idx.y + st.mid.y) / 2;
     const rx = lerp(st.idx.x, mx, m), ry = lerp(st.idx.y, my, m);
     const bx = lerp(st.mid.x, mx, m), by = lerp(st.mid.y, my, m);
 
