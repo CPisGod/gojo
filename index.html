@@ -28,7 +28,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지거나 카메라 쪽으로 쭉 내밀면 발사 → 펑!</p>
+     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <button id="startBtn">카메라 켜기</button>
   <p id="err" style="color:#ff8a8a"></p>
 </div>
@@ -181,7 +181,7 @@ function processHand(lm, st) {
   st.size = handSize;
   st.alive = 10; // 프레임 유지 카운터
 
-  // ---- 발사 감지: 무라사키 상태에서 휙 던지거나(좌우/상하), 카메라 쪽으로 쭉 내밀면 발사 ----
+  // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
   const now = performance.now();
   if (together) st.mergedAt = now;
   const ax = (st.idx.x + st.mid.x) / 2, ay = (st.idx.y + st.mid.y) / 2;
@@ -192,13 +192,8 @@ function processHand(lm, st) {
     const o = hist[0], dt = (now - o.t) / 1000;
     const vx = (ax - o.x) / dt, vy = (ay - o.y) / dt;
     const speed = Math.hypot(vx, vy);
-    const growth = handSize / o.s;
     if (speed > handSize * 8) {
       fire(ax, ay, vx / speed, vy / speed, handSize, 'flick', Math.max(1300, Math.min(2600, speed)));
-      st.cool = now + 1100; hist.length = 0;
-    } else if (growth > 1.35) {
-      const wx = ax - wristS.x, wy = ay - wristS.y, wl = Math.hypot(wx, wy) || 1;
-      fire(ax, ay, wx / wl, wy / wl, handSize, 'push', 380);
       st.cool = now + 1100; hist.length = 0;
     }
   }
@@ -211,7 +206,7 @@ let shake = 0, lastT = 0;
 function fire(x, y, dx, dy, handSize, mode, speed) {
   const r = Math.max(18, handSize * 0.3) * 1.5;
   projectiles.push({ x, y, vx: dx * speed, vy: dy * speed, r0: r, r, mode,
-    age: 0, max: mode === 'push' ? 0.65 : 1.0 });
+    age: 0, max: 1.0 });
 }
 
 function explode(x, y, r) {
@@ -231,7 +226,6 @@ function stepProjectiles(dt) {
     const p = projectiles[i];
     p.age += dt;
     p.x += p.vx * dt; p.y += p.vy * dt;
-    if (p.mode === 'push') p.r = p.r0 * (1 + 2.8 * (p.age / p.max)); // 화면 안쪽으로 날아가며 커짐
     const out = p.x < 20 || p.x > W - 20 || p.y < 20 || p.y > H - 20;
     if (p.age >= p.max || out) {
       explode(Math.max(20, Math.min(W - 20, p.x)), Math.max(20, Math.min(H - 20, p.y)), p.r);
