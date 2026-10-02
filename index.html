@@ -189,9 +189,11 @@ function processHand(lm, st) {
   track('idx', idx); track('mid', mid);
   const anchorRaw = { x: (thumbS.x + mid.raw.x) / 2, y: (thumbS.y + mid.raw.y) / 2 }; // 엄지-중지 접점
   track('anchor', anchorRaw);
-  st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, 0.18);
-  st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
-  st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
+  // 무라사키 우선: 엄지-중지가 붙었거나 붙기 직전이면 아카/아오는 즉시 끄고 보라색만 보여줌
+  const suppress = together || (pinch < handSize * 0.6 && openCount >= 2);
+  st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, together ? 0.4 : 0.18);
+  st.redT = lerp(st.redT || 0, idxExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
+  st.blueT = lerp(st.blueT || 0, midExt && !suppress ? 1 : 0, suppress ? 0.8 : 0.25);
   st.size = handSize;
   st.seen = now;
 
