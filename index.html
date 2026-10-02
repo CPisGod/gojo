@@ -184,19 +184,28 @@ function processHand(lm, st) {
   // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
   const now = performance.now();
   if (together) st.mergedAt = now;
-  const ax = (st.idx.x + st.mid.x) / 2, ay = (st.idx.y + st.mid.y) / 2;
+  // 스무딩 전 좌표로 속도를 계산 (스무딩하면 속도가 작게 나옴)
+  const ax = (idx.x + mid.x) / 2, ay = (idx.y + mid.y) / 2;
   const hist = st.hist || (st.hist = []);
-  hist.push({ t: now, x: ax, y: ay, s: handSize });
-  while (hist.length && now - hist[0].t > 220) hist.shift();
-  if (hist.length >= 3 && now - (st.mergedAt || -1e9) < 350 && now > (st.cool || 0)) {
-    const o = hist[0], dt = (now - o.t) / 1000;
+  hist.push({ t: now, x: ax, y: ay });
+  while (hist.length && now - hist[0].t > 260) hist.shift();
+  if (hist.length >= 2) {
+    const o = hist[0], dt = Math.max(0.04, (now - o.t) / 1000);
     const vx = (ax - o.x) / dt, vy = (ay - o.y) / dt;
-    const speed = Math.hypot(vx, vy);
-    if (speed > handSize * 8) {
-      fire(ax, ay, vx / speed, vy / speed, handSize, 'flick', Math.max(1300, Math.min(2600, speed)));
-      st.cool = now + 1100; hist.length = 0;
+    st.vel = { vx, vy, speed: Math.hypot(vx, vy), x: ax, y: ay, t: now };
+    if (now - (st.mergedAt || -1e9) < 600 && now > (st.cool || 0) && st.vel.speed > handSize * FLICK_SPEED) {
+      launch(st);
     }
   }
+}
+
+// 던지기 속도 임계값 (손 크기 배수/초). 낮을수록 쉽게 발사됨
+const FLICK_SPEED = 4;
+
+function launch(st) {
+  const v = st.vel, now = performance.now();
+  fire(v.x, v.y, v.vx / v.speed, v.vy / v.speed, st.size, 'flick', Math.max(1300, Math.min(2600, v.speed)));
+  st.cool = now + 1100; st.hist = []; st.vel = null;
 }
 
 // ---- 발사체 / 폭발 ----
@@ -299,7 +308,12 @@ function render(t) {
   for (const st of states) {
     if (!st.alive) continue;
     st.alive--;
-    if (st.alive === 0) { st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; continue; }
+    if (st.alive === 0) {
+      // 휘두르다가 손을 놓친 경우에도, 직전에 충분히 빨랐으면 발사
+      const now = performance.now();
+      if (st.vel && now - st.vel.t < 400 && now - (st.mergedAt || -1e9) < 800 && now > (st.cool || 0)
+          && st.vel.speed > st.size * FLICK_SPEED * 0.7) launch(st);
+      st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; continue; }
     if (!st.idx) continue;
 
     const base = Math.max(14, st.size * 0.28);
