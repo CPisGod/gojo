@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>무량공처 - 아카 · 아오 · 무라사키</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    font-family: system-ui, -apple-system, "Noto Sans KR", sans-serif; color: #fff; }
+  video, canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  video { object-fit: cover; transform: scaleX(-1); filter: brightness(.7); }
+  #overlay { z-index: 2; pointer-events: none; }
+  #start { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; background: rgba(0,0,0,.85); text-align: center; padding: 24px; }
+  #start h1 { margin: 0; font-size: 28px; letter-spacing: .1em; }
+  #start p { margin: 0; opacity: .75; line-height: 1.6; }
+  #start b.r { color: #ff5b5b; } #start b.b { color: #5b9dff; } #start b.p { color: #c46bff; }
+  button { font: inherit; font-size: 18px; padding: 12px 32px; border-radius: 999px; border: 0;
+    background: linear-gradient(90deg, #ff4b4b, #8a4bff, #4b8bff); color: #fff; cursor: pointer; }
+  #status { position: fixed; left: 12px; bottom: 12px; z-index: 3; font-size: 13px; opacity: .7; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted></video>
+<canvas id="overlay"></canvas>
+<div id="status"></div>
+<div id="start">
+  <h1>無量空処</h1>
+  <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
+     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+  <button id="startBtn">카메라 켜기</button>
+  <p id="err" style="color:#ff8a8a"></p>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('overlay');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+let W = 0, H = 0, dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+// 정규화 좌표(영상) -> 화면 좌표 (object-fit: cover + 거울모드)
+function toScreen(p) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const s = Math.max(W / vw, H / vh);
+  const ox = (W - vw * s) / 2, oy = (H - vh * s) / 2;
+  return { x: W - (ox + p.x * vw * s) , y: oy + p.y * vh * s };
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const lerp = (a, b, t) => a + (b - a) * t;
+
+const COLORS = {
+  red:    { core: [255, 235, 230], mid: [255, 70, 60],  edge: [180, 0, 20] },
+  blue:   { core: [225, 240, 255], mid: [60, 130, 255], edge: [0, 30, 180] },
+  purple: { core: [245, 225, 255], mid: [170, 80, 255], edge: [80, 0, 160] },
+};
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+// 손마다 상태 유지 (부드러운 추적, 합체 전환)
+const states = [{}, {}];
+// 파티클
+const particles = [];
+
+function drawOrb(x, y, r, col, alpha) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.6);
+  g.addColorStop(0, rgba(col.core, 1));
+  g.addColorStop(0.18, rgba(col.core, 0.95));
+  g.addColorStop(0.4, rgba(col.mid, 0.8));
+  g.addColorStop(0.7, rgba(col.edge, 0.3));
+  g.addColorStop(1, rgba(col.edge, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r * 2.6, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function emit(x, y, r, col, kind, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = r * (kind === 'blue' ? 2.2 : 1.0) * (0.6 + Math.random() * 0.6);
+    particles.push({
+      x: x + Math.cos(a) * d, y: y + Math.sin(a) * d, cx: x, cy: y,
+      a, d, kind, col, life: 0, max: 30 + Math.random() * 30,
+      size: 1.5 + Math.random() * 2.5,
+      sp: (kind === 'blue' ? 0.12 : 0.06) * (Math.random() < .5 ? 1 : -1) + 0.05,
+    });
+  }
+}
+
+function stepParticles(centers) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life++;
+    if (p.life > p.max) { particles.splice(i, 1); continue; }
+    const t = p.life / p.max;
+    if (p.kind === 'red') {            // 밖으로 튀어나가는 반발
+      p.d += 2.2;
+      p.a += p.sp * 0.4;
+    } else if (p.kind === 'blue') {    // 안으로 빨려드는 소용돌이
+      p.d *= 0.95;
+      p.a += p.sp * 1.5;
+    } else {                           // 보라: 고리 형태로 회전
+      p.d += Math.sin(t * Math.PI) * 1.2;
+      p.a += p.sp * 2;
+    }
+    const x = p.cx + Math.cos(p.a) * p.d;
+    const y = p.cy + Math.sin(p.a) * p.d;
+    ctx.globalAlpha = (1 - t) * 0.9;
+    ctx.fillStyle = rgba(p.col.mid, 1);
+    ctx.beginPath(); ctx.arc(x, y, p.size * (1 - t * .5), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function label(text, x, y, col, alpha) {
+  if (alpha <= 0.05) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = '700 22px "Noto Serif KR", serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = rgba(col.mid, 1);
+  ctx.shadowColor = rgba(col.mid, 1); ctx.shadowBlur = 14;
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+// 손가락 끝점 (끝마디 방향으로 살짝 연장)
+function fingerTip(lm, tipIdx, pipIdx) {
+  const tip = toScreen(lm[tipIdx]), pip = toScreen(lm[pipIdx]);
+  const dx = tip.x - pip.x, dy = tip.y - pip.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ext = 38;
+  return { x: tip.x + dx / len * ext, y: tip.y + dy / len * ext, raw: tip };
+}
+
+// 손가락이 펴져 있는지: 손목에서 끝까지 거리 > 손목에서 PIP까지 거리
+// z까지 포함해서 계산 -> 손가락을 카메라 쪽으로 겨눠도(원근 단축) 펴진 걸로 인식
+function isExtended(lm, tip, pip) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const w = lm[0];
+  const d = (a, b) => Math.hypot((a.x - b.x) * vw, (a.y - b.y) * vh, (a.z - b.z) * vw);
+  return d(w, lm[tip]) > d(w, lm[pip]) * 1.08;
+}
+
+const HOLD_MS = 180;   // 판정이 잠깐 흔들려도 이 시간 동안은 이전 상태 유지
+const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 위치에 이펙트 유지
+
+function processHand(lm, st) {
+  const now = performance.now();
+  if (isExtended(lm, 8, 6)) st.idxAt = now;
+  if (isExtended(lm, 12, 10)) st.midAt = now;
+  const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
+  const midExt = now - (st.midAt || -1e9) < HOLD_MS;
+  const idx = fingerTip(lm, 8, 6);
+  const mid = fingerTip(lm, 12, 10);
+
+  // 손 크기(손목~중지 MCP)에 비례한 거리 임계값 -> 카메라 거리에 무관
+  const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
+  const handSize = dist(wristS, mcpS) || 1;
+  const gap = dist(idx.raw, mid.raw);
+  const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
+  st.merged = togetherRaw;
+  if (togetherRaw) st.togAt = now;
+  const together = now - (st.togAt || -1e9) < HOLD_MS;
+
+  const sm = 0.45; // 위치 스무딩
+  const track = (key, p) => {
+    st[key] = st[key] ? { x: lerp(st[key].x, p.x, sm), y: lerp(st[key].y, p.y, sm) } : { x: p.x, y: p.y };
+  };
+  track('idx', idx); track('mid', mid);
+  st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, 0.18);
+  st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
+  st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
+  st.size = handSize;
+  st.seen = now;
+
+  // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
+  if (together) st.mergedAt = now;
+  // 스무딩 전 좌표로 속도를 계산 (스무딩하면 속도가 작게 나옴)
+  const ax = (idx.x + mid.x) / 2, ay = (idx.y + mid.y) / 2;
+  const hist = st.hist || (st.hist = []);
+  hist.push({ t: now, x: ax, y: ay });
+  while (hist.length && now - hist[0].t > 260) hist.shift();
+  if (hist.length >= 2) {
+    const o = hist[0], dt = Math.max(0.04, (now - o.t) / 1000);
+    const vx = (ax - o.x) / dt, vy = (ay - o.y) / dt;
+    st.vel = { vx, vy, speed: Math.hypot(vx, vy), x: ax, y: ay, t: now };
+    if (now - (st.mergedAt || -1e9) < 600 && now > (st.cool || 0) && st.vel.speed > handSize * FLICK_SPEED) {
+      launch(st);
+    }
+  }
+}
+
+// 던지기 속도 임계값 (손 크기 배수/초). 낮을수록 쉽게 발사됨
+const FLICK_SPEED = 4;
+
+function launch(st) {
+  const v = st.vel, now = performance.now();
+  fire(v.x, v.y, v.vx / v.speed, v.vy / v.speed, st.size, 'flick', Math.max(1300, Math.min(2600, v.speed)));
+  st.cool = now + 1100; st.hist = []; st.vel = null;
+}
+
+// ---- 발사체 / 폭발 ----
+const projectiles = [], sparks = [], blasts = [];
+let shake = 0, lastT = 0;
+
+function fire(x, y, dx, dy, handSize, mode, speed) {
+  const r = Math.max(18, handSize * 0.3) * 1.5;
+  projectiles.push({ x, y, vx: dx * speed, vy: dy * speed, r0: r, r, mode,
+    age: 0, max: 1.0 });
+}
+
+function explode(x, y, r) {
+  blasts.push({ x, y, age: 0, R: Math.max(r * 4.5, Math.min(W, H) * 0.35) });
+  shake = 22;
+  for (let i = 0; i < 110; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 150 + Math.random() * 850;
+    const white = Math.random() < 0.3;
+    sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0,
+      max: 0.5 + Math.random() * 0.7, size: 1.5 + Math.random() * 3.5,
+      col: white ? [255, 245, 255] : COLORS.purple.mid, drag: 2.2 });
+  }
+}
+
+function stepProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.age += dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    const out = p.x < 20 || p.x > W - 20 || p.y < 20 || p.y > H - 20;
+    if (p.age >= p.max || out) {
+      explode(Math.max(20, Math.min(W - 20, p.x)), Math.max(20, Math.min(H - 20, p.y)), p.r);
+      projectiles.splice(i, 1); continue;
+    }
+    drawOrb(p.x, p.y, p.r, COLORS.purple, 1);
+    // 꼬리
+    for (let k = 0; k < 4; k++) {
+      sparks.push({ x: p.x + (Math.random() - .5) * p.r, y: p.y + (Math.random() - .5) * p.r,
+        vx: -p.vx * 0.1 + (Math.random() - .5) * 120, vy: -p.vy * 0.1 + (Math.random() - .5) * 120,
+        age: 0, max: 0.25 + Math.random() * 0.25, size: 2 + Math.random() * 3,
+        col: COLORS.purple.mid, drag: 1 });
+    }
+  }
+}
+
+function stepSparks(dt) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+    s.age += dt;
+    if (s.age > s.max) { sparks.splice(i, 1); continue; }
+    const k = Math.max(0, 1 - s.drag * dt);
+    s.vx *= k; s.vy *= k; s.x += s.vx * dt; s.y += s.vy * dt;
+    const t = s.age / s.max;
+    ctx.globalAlpha = (1 - t);
+    ctx.fillStyle = rgba(s.col, 1);
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.size * (1 - t * .6), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function stepBlasts(dt) {
+  for (let i = blasts.length - 1; i >= 0; i--) {
+    const b = blasts[i];
+    b.age += dt;
+    if (b.age > 1.0) { blasts.splice(i, 1); continue; }
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // 전체 섬광
+    const fl = Math.max(0, 1 - b.age / 0.35);
+    if (fl > 0) {
+      ctx.fillStyle = `rgba(215,170,255,${fl * 0.55})`;
+      ctx.fillRect(-50, -50, W + 100, H + 100);
+    }
+    // 중심 코어
+    const ct = Math.min(1, b.age / 0.5);
+    const cr = b.R * 0.5 * Math.sin(Math.min(1, ct * 1.4) * Math.PI / 2);
+    drawOrb(b.x, b.y, Math.max(1, cr * 0.5), COLORS.purple, 1 - ct);
+    // 충격파 링 3겹
+    for (let k = 0; k < 3; k++) {
+      const a = b.age - k * 0.08;
+      if (a <= 0 || a > 0.8) continue;
+      const u = a / 0.8, e = 1 - Math.pow(1 - u, 3);
+      ctx.globalAlpha = (1 - u) * 0.9;
+      ctx.strokeStyle = rgba(k === 0 ? [255, 245, 255] : COLORS.purple.mid, 1);
+      ctx.lineWidth = Math.max(1, (1 - u) * (k === 0 ? 10 : 6));
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.R * e, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function render(t) {
+  const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0.016);
+  lastT = t;
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0.5) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.86; }
+  for (const st of states) {
+    if (!st.seen) continue;
+    const nowR = performance.now();
+    if (nowR - st.seen > LOST_MS) {
+      // 휘두르다가 손을 놓친 경우에도, 직전에 충분히 빨랐으면 발사
+      if (st.vel && nowR - st.vel.t < 700 && nowR - (st.mergedAt || -1e9) < 900 && nowR > (st.cool || 0)
+          && st.vel.speed > st.size * FLICK_SPEED * 0.7) launch(st);
+      st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; st.seen = 0; st.wrist = null; st.hist = [];
+      continue;
+    }
+    if (!st.idx) continue;
+
+    const base = Math.max(14, st.size * 0.28);
+    const pulse = 1 + Math.sin(t / 120) * 0.06;
+    if (t < (st.cool || 0) - 600) continue; // 방금 발사한 손은 구체가 떠난 것처럼 잠시 숨김
+    const m = st.mergeT;
+    const sep = 1 - m;
+
+    // 합체 시 두 구체가 중점으로 모임
+    const mx = (st.idx.x + st.mid.x) / 2, my = (st.idx.y + st.mid.y) / 2;
+    const rx = lerp(st.idx.x, mx, m), ry = lerp(st.idx.y, my, m);
+    const bx = lerp(st.mid.x, mx, m), by = lerp(st.mid.y, my, m);
+
+    const rAlpha = st.redT * sep, bAlpha = st.blueT * sep;
+    drawOrb(rx, ry, base * pulse, COLORS.red, rAlpha);
+    drawOrb(bx, by, base * pulse, COLORS.blue, bAlpha);
+    label('赤', rx, ry - base * 2.4, COLORS.red, rAlpha);
+    label('蒼', bx, by - base * 2.4, COLORS.blue, bAlpha);
+
+    if (m > 0.05) {
+      const pr = base * (1 + m * 0.9) * pulse;
+      drawOrb(mx, my, pr, COLORS.purple, m);
+      // 보라 구체 주변 링
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = m * 0.7;
+      ctx.strokeStyle = rgba(COLORS.purple.mid, 1);
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(mx, my, pr * 1.9 + Math.sin(t / 90) * 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+      label('茈', mx, my - pr * 2.6, COLORS.purple, m);
+      emit(mx, my, pr, COLORS.purple, 'purple', 3);
+    } else {
+      if (rAlpha > .3) emit(rx, ry, base, COLORS.red, 'red', 2);
+      if (bAlpha > .3) emit(bx, by, base, COLORS.blue, 'blue', 2);
+    }
+  }
+  stepParticles();
+  stepProjectiles(dt);
+  stepSparks(dt);
+  stepBlasts(dt);
+  ctx.restore();
+}
+
+// 손 순서가 프레임마다 바뀌어도 가장 가까운 이전 손 상태에 이어 붙이기
+let fps = 0, fpsCount = 0, fpsT = performance.now();
+function assignHands(list) {
+  const pairs = [];
+  list.forEach((lm, ci) => states.forEach((st, si) => {
+    if (st.seen && st.wrist) pairs.push({ ci, si, d: Math.hypot(lm[0].x - st.wrist.x, lm[0].y - st.wrist.y) });
+  }));
+  pairs.sort((a, b) => a.d - b.d);
+  const usedC = new Set(), usedS = new Set(), out = [];
+  for (const p of pairs) {
+    if (p.d > 0.3 || usedC.has(p.ci) || usedS.has(p.si)) continue;
+    usedC.add(p.ci); usedS.add(p.si); out.push([p.ci, p.si]);
+  }
+  list.forEach((lm, ci) => {
+    if (usedC.has(ci)) return;
+    let si = states.findIndex((st, i) => !usedS.has(i) && !st.seen);
+    if (si < 0) si = states.findIndex((st, i) => !usedS.has(i));
+    if (si < 0) return;
+    usedC.add(ci); usedS.add(si); out.push([ci, si]);
+  });
+  for (const [ci, si] of out) {
+    states[si].wrist = { x: list[ci][0].x, y: list[ci][0].y };
+    processHand(list[ci], states[si]);
+  }
+}
+
+// ---- MediaPipe (Tasks Vision HandLandmarker) ----
+const TASKS = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+let landmarker, running = false, lastVideoTime = -1;
+
+async function createLandmarker() {
+  const { FilesetResolver, HandLandmarker } = await import(`${TASKS}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(`${TASKS}/wasm`);
+  const make = delegate => HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MODEL, delegate },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.4,
+  });
+  try { return await make('GPU'); } catch (e) { console.warn('GPU 실패, CPU로 전환', e); return await make('CPU'); }
+}
+
+async function start() {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+  } catch (e) {
+    err.textContent = '카메라를 켤 수 없어요: ' + e.message + ' (localhost 또는 https 로 열어야 해요)';
+    return;
+  }
+  document.getElementById('start').style.display = 'none';
+  statusEl.textContent = '손 인식 모델 로딩 중…';
+  try {
+    landmarker = await createLandmarker();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('start').style.display = 'flex';
+    err.textContent = '손 인식 모델을 불러오지 못했어요: ' + (e.message || e) + ' (인터넷 연결/광고차단 확인 후 다시 시도)';
+    return;
+  }
+  running = true;
+  loop();
+}
+
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const res = landmarker.detectForVideo(video, performance.now());
+      const list = res.landmarks || [];
+      // 화면 x 위치 순으로 정렬해서 손 상태가 뒤바뀌지 않게
+      assignHands(list.slice(0, 2));
+      fpsCount++;
+      const t = performance.now();
+      if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
+      statusEl.textContent = (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
+    } catch (e) { console.error(e); statusEl.textContent = '인식 오류: ' + e.message; }
+  }
+  requestAnimationFrame(loop);
+}
+
+function animate(t) { render(t); requestAnimationFrame(animate); }
+requestAnimationFrame(animate);
+
+document.getElementById('startBtn').addEventListener('click', start);
+</script>
+</body>
+</html>
