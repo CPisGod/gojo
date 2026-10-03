@@ -33,7 +33,6 @@
   <p id="err" style="color:#ff8a8a"></p>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
 <script>
 const video = document.getElementById('video');
 const canvas = document.getElementById('overlay');
@@ -392,10 +391,25 @@ function assignHands(list) {
   }
 }
 
-// ---- MediaPipe ----
-let hands, running = false;
+// ---- MediaPipe (Tasks Vision HandLandmarker) ----
+const TASKS = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+let landmarker, running = false, lastVideoTime = -1;
+
+async function createLandmarker() {
+  const { FilesetResolver, HandLandmarker } = await import(`${TASKS}/vision_bundle.mjs`);
+  const fileset = await FilesetResolver.forVisionTasks(`${TASKS}/wasm`);
+  const make = delegate => HandLandmarker.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MODEL, delegate },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.4,
+  });
+  try { return await make('GPU'); } catch (e) { console.warn('GPU 실패, CPU로 전환', e); return await make('CPU'); }
+}
+
 async function start() {
   const err = document.getElementById('err');
+  err.textContent = '';
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
@@ -405,27 +419,34 @@ async function start() {
     err.textContent = '카메라를 켤 수 없어요: ' + e.message + ' (localhost 또는 https 로 열어야 해요)';
     return;
   }
-  statusEl.textContent = '손 인식 모델 로딩 중…';
-  hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}` });
-  hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.4 });
-  hands.onResults(res => {
-    const list = res.multiHandLandmarks || [];
-    // 화면 x 위치 순으로 정렬해서 손 상태가 뒤바뀌지 않게
-    assignHands(list.slice(0, 2));
-    fpsCount++;
-    const t = performance.now();
-    if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
-    statusEl.textContent = (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
-  });
   document.getElementById('start').style.display = 'none';
+  statusEl.textContent = '손 인식 모델 로딩 중…';
+  try {
+    landmarker = await createLandmarker();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('start').style.display = 'flex';
+    err.textContent = '손 인식 모델을 불러오지 못했어요: ' + (e.message || e) + ' (인터넷 연결/광고차단 확인 후 다시 시도)';
+    return;
+  }
   running = true;
   loop();
 }
 
-async function loop() {
+function loop() {
   if (!running) return;
-  if (video.readyState >= 2) {
-    try { await hands.send({ image: video }); } catch (e) { console.error(e); }
+  if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    try {
+      const res = landmarker.detectForVideo(video, performance.now());
+      const list = res.landmarks || [];
+      // 화면 x 위치 순으로 정렬해서 손 상태가 뒤바뀌지 않게
+      assignHands(list.slice(0, 2));
+      fpsCount++;
+      const t = performance.now();
+      if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
+      statusEl.textContent = (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
+    } catch (e) { console.error(e); statusEl.textContent = '인식 오류: ' + e.message; }
   }
   requestAnimationFrame(loop);
 }
