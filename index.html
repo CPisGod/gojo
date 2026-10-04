@@ -42,6 +42,7 @@
   #debug .f { display: flex; gap: 4px; margin: 3px 0; }
   #debug .f i { font-style: normal; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.12); opacity: .55; }
   #debug .f i.on { background: #2fbf71; color: #00170a; opacity: 1; font-weight: 700; }
+  #debug small { opacity: .6; margin-left: 2px; }
   #debug .ok { color: #6df0a4; } #debug .no { color: #ff8a8a; } #debug .tag { color: #c9a8ff; font-weight: 700; }
   #status { position: fixed; left: 12px; bottom: 12px; z-index: 3; font-size: 13px; opacity: .7; }
 </style>
@@ -57,7 +58,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     (검지나 중지 <b>하나만 펴도</b> 발동!) 두 손가락을 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+     (검지나 중지 <b>하나만 완전히 곧게</b> 펴도 발동!) 두 손가락을 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <p>검지·중지를 꼬으면(🤞) <b class="p">영역전개</b> — 손만 남기고 배경이 <b class="b">무량공처</b>로!<br>
      <span style="opacity:.6;font-size:13px">(손 인식 없이 효과만 보려면 V 키)</span></p>
   <button id="startBtn">카메라 켜기</button>
@@ -221,6 +222,25 @@ const CROSS_MAX_BETWEEN = 55;   // 두 손가락 사이 최대 각도(도)
 const CROSS_HOLD_MS = 280;   // 꼬임 판정이 잠깐 끊겨도 영역을 유지하는 시간
 const isCrossed = (st, now) => now - (st.crossAt || -1e9) < CROSS_HOLD_MS;
 
+// 손가락이 '완전히 곧은지': 관절마다 꺾인 각도(도)를 3D로 잰다. z도 포함해서 카메라 쪽으로 겨눠도 판정 가능.
+// 0° = 일직선. PIP/DIP가 조금만 굽어도(갈고리 모양) 탈락한다.
+const STRAIGHT_MAX_PIP = 18, STRAIGHT_MAX_DIP = 22, STRAIGHT_MAX_MCP = 35;
+function fingerBend(lm, mcp, pip, dip, tip) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const P = i => [lm[i].x * vw, lm[i].y * vh, lm[i].z * vw];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const bend = (a, b, c, d) => {            // 선분 a->b 와 c->d 사이의 꺾임각
+    const u = sub(b, a), v = sub(d, c);
+    const n = Math.hypot(...u) * Math.hypot(...v) || 1;
+    return Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / n))) * 180 / Math.PI;
+  };
+  const w = P(0), m = P(mcp), pp = P(pip), dd = P(dip), t = P(tip);
+  const b = { mcp: bend(w, m, m, pp), pip: bend(m, pp, pp, dd), dip: bend(pp, dd, dd, t) };
+  b.ok = b.pip <= STRAIGHT_MAX_PIP && b.dip <= STRAIGHT_MAX_DIP && b.mcp <= STRAIGHT_MAX_MCP;
+  b.max = Math.max(b.pip, b.dip);
+  return b;
+}
+
 // 엄지: 끝점이 새끼 MCP에서 IP보다 멀면 펴진 것 (접으면 손바닥 쪽으로 들어옴)
 function isThumbExtended(lm) {
   const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
@@ -239,8 +259,10 @@ const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 �
 
 function processHand(lm, st) {
   const now = performance.now();
-  if (isExtended(lm, 8, 6)) st.idxAt = now;     // 검지만 펴져도 아카
-  if (isExtended(lm, 12, 10)) st.midAt = now;   // 중지만 펴져도 아오
+  // 아카/아오: 손가락이 길게 뻗어 있고 + 관절이 굽지 않은 '완전히 곧은' 상태일 때만
+  const bIdx = fingerBend(lm, 5, 6, 7, 8), bMid = fingerBend(lm, 9, 10, 11, 12);
+  if (isExtended(lm, 8, 6) && bIdx.ok) st.idxAt = now;     // 검지만 곧게 펴져도 아카
+  if (isExtended(lm, 12, 10) && bMid.ok) st.midAt = now;   // 중지만 곧게 펴져도 아오
   const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
   const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
@@ -277,7 +299,7 @@ function processHand(lm, st) {
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
   st.dbg = {
     ext: [isThumbExtended(lm), isExtended(lm, 8, 6), isExtended(lm, 12, 10), isExtended(lm, 16, 14), isExtended(lm, 20, 18)],
-    idx: idxExt, mid: midExt, gap: gap / handSize, together, cs, crossed,
+    idx: idxExt, mid: midExt, bIdx, bMid, gap: gap / handSize, together, cs, crossed,
   };
   st.size = handSize;
   st.pts = lm.map(toScreen);   // 무량공처에서 손 마스크를 만들 때 사용
@@ -675,6 +697,7 @@ function updateDebug() {
     rows.push(`<div class="h">손 ${i + 1} ${tags.length ? '· <span class="tag">' + tags.join(' ') + '</span>' : ''}</div>
       <div class="f">${NAMES.map((n, k) => `<i class="${d.ext[k] ? 'on' : ''}">${n}</i>`).join('')}</div>
       <div>꼬임값 ${d.cs.s.toFixed(2)} · 평행 ${yn(d.cs.parallel)} · 교차 ${yn(d.cs.hit)}</div>
+      <div>곧음 검지 ${yn(d.bIdx.ok)}<small>${d.bIdx.max.toFixed(0)}°</small> · 중지 ${yn(d.bMid.ok)}<small>${d.bMid.max.toFixed(0)}°</small></div>
       <div>검지-중지 간격 ${d.gap.toFixed(2)}</div>`);
   });
   rows.push(`<div class="h">${domain.on ? '<span class="tag">領域展開 무량공처 ON</span>' : '무량공처 OFF'}${domain.forced ? ' (V 강제)' : ''}</div>`);
