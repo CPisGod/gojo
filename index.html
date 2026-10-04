@@ -198,8 +198,18 @@ function crossScore(lm) {
   const lx = (b.x - a.x) / ll, ly = (b.y - a.y) / ll;
   const t8 = P(8), t12 = P(12);
   const s = ((t12.x - t8.x) * lx + (t12.y - t8.y) * ly) / hs;   // 음수일수록 많이 꼬임
-  return { s, hit: segHit(P(6), P(8), P(10), P(12)) };
+  // 🤞는 두 손가락이 손이 향한 방향(손목->중지 MCP)과 거의 같은 쪽을 향하고 서로 평행에 가깝다.
+  // 한 손가락이 옆으로 눕는 십자(+) 모양은 방향이 크게 달라서 여기서 걸러진다.
+  const ux = (b.x - P(0).x) / hs, uy = (b.y - P(0).y) / hs;
+  const dir = (m, t) => { const d = dist(m, t) || 1; return { x: (t.x - m.x) / d, y: (t.y - m.y) / d }; };
+  const ang = (p, q) => Math.acos(Math.max(-1, Math.min(1, p.x * q.x + p.y * q.y))) * 180 / Math.PI;
+  const di = dir(a, t8), dm = dir(b, t12), up = { x: ux, y: uy };
+  const parallel = ang(di, up) < CROSS_MAX_DEV && ang(dm, up) < CROSS_MAX_DEV
+    && ang(di, dm) < CROSS_MAX_BETWEEN && dist(t8, t12) < hs * 0.8;
+  return { s, parallel, hit: segHit(P(6), P(8), P(10), P(12)) };
 }
+const CROSS_MAX_DEV = 50;       // 각 손가락이 손 방향에서 벗어날 수 있는 최대 각도(도)
+const CROSS_MAX_BETWEEN = 55;   // 두 손가락 사이 최대 각도(도)
 const CROSS_HOLD_MS = 280;   // 꼬임 판정이 잠깐 끊겨도 영역을 유지하는 시간
 const isCrossed = (st, now) => now - (st.crossAt || -1e9) < CROSS_HOLD_MS;
 
@@ -223,8 +233,8 @@ function processHand(lm, st) {
   // 꼬임: 진입은 엄격하게, 유지는 느슨하게(히스테리시스). 약지·소지가 둘 다 펴져 있으면 제외
   const cs = crossScore(lm);
   st.crossScore = cs.s;
-  const enter = cs.s < -0.04 || (cs.hit && cs.s < 0.1);
-  const stay = cs.s < 0.04 || cs.hit;
+  const enter = cs.parallel && (cs.s < -0.04 || (cs.hit && cs.s < 0.1));
+  const stay = cs.parallel && (cs.s < 0.04 || cs.hit);
   const crossedRaw = idxExt && midExt && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
   st.crossed = crossedRaw;
   if (crossedRaw) st.crossAt = now;
