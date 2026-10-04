@@ -10,7 +10,25 @@
     font-family: system-ui, -apple-system, "Noto Sans KR", sans-serif; color: #fff; }
   video, canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
   video { object-fit: cover; transform: scaleX(-1); filter: brightness(.7); }
+  #void { z-index: 1; pointer-events: none; }
   #overlay { z-index: 2; pointer-events: none; }
+  #domainText { position: fixed; inset: 0; z-index: 4; pointer-events: none; display: grid;
+    place-items: start center; padding-top: 14vh; font-family: "Noto Serif KR", "Noto Serif JP", serif; font-weight: 900; }
+  #domainText span { grid-area: 1 / 1; opacity: 0; white-space: nowrap; color: #fff;
+    text-shadow: 0 0 12px #7fd0ff, 0 0 34px #7a5bff, 0 0 70px #3b6bff; }
+  #domainText .a { font-size: clamp(34px, 8vw, 96px); letter-spacing: .25em; padding-left: .25em; }
+  #domainText .b { font-size: clamp(44px, 11vw, 130px); letter-spacing: .2em; padding-left: .2em; }
+  #domainText.show .a { animation: dtA 1.5s ease-out forwards; }
+  #domainText.show .b { animation: dtB 2.2s ease-out 1.2s forwards; }
+  @keyframes dtA { 0% { opacity: 0; transform: scale(1.5); filter: blur(14px); }
+    15% { opacity: 1; transform: scale(1); filter: blur(0); } 75% { opacity: 1; } 100% { opacity: 0; transform: scale(.96); } }
+  @keyframes dtB { 0% { opacity: 0; transform: scale(1.7); filter: blur(18px); }
+    14% { opacity: 1; transform: scale(1); filter: blur(0); } 70% { opacity: 1; } 100% { opacity: 0; transform: scale(.97); } }
+  #sub { position: fixed; left: 0; right: 0; bottom: 7vh; z-index: 4; pointer-events: none; text-align: center;
+    font-size: clamp(18px, 3.2vw, 34px); font-weight: 800; opacity: 0; transition: opacity .25s;
+    text-shadow: 0 0 3px #000, 0 0 3px #000, 0 2px 6px #000, 0 0 14px #000; }
+  #sub.on { opacity: 1; }
+  #sub small { display: block; font-size: .55em; font-weight: 600; opacity: .85; margin-bottom: 2px; }
   #start { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 16px; background: rgba(0,0,0,.85); text-align: center; padding: 24px; }
   #start h1 { margin: 0; font-size: 28px; letter-spacing: .1em; }
@@ -23,12 +41,17 @@
 </head>
 <body>
 <video id="video" playsinline muted></video>
+<canvas id="void"></canvas>
 <canvas id="overlay"></canvas>
+<div id="domainText"><span class="a">領域展開</span><span class="b">無量空処</span></div>
+<div id="sub"></div>
 <div id="status"></div>
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
      두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+  <p>검지·중지를 꼬으면(🤞) <b class="p">영역전개</b> — 손만 남기고 배경이 <b class="b">무량공처</b>로!<br>
+     <span style="opacity:.6;font-size:13px">(손 인식 없이 효과만 보려면 V 키)</span></p>
   <button id="startBtn">카메라 켜기</button>
   <p id="err" style="color:#ff8a8a"></p>
 </div>
@@ -37,6 +60,8 @@
 const video = document.getElementById('video');
 const canvas = document.getElementById('overlay');
 const ctx = canvas.getContext('2d');
+const vcv = document.getElementById('void');
+const vctx = vcv.getContext('2d');
 const statusEl = document.getElementById('status');
 
 let W = 0, H = 0, dpr = 1;
@@ -45,6 +70,8 @@ function resize() {
   W = innerWidth; H = innerHeight;
   canvas.width = W * dpr; canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  vcv.width = W * dpr; vcv.height = H * dpr;
+  vctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 addEventListener('resize', resize); resize();
 
@@ -156,6 +183,26 @@ function isExtended(lm, tip, pip) {
   return d(w, lm[tip]) > d(w, lm[pip]) * 1.08;
 }
 
+// ---- 🤞 검지·중지 꼬기 감지 ----
+// 손 자체 기준 좌우축(검지 MCP -> 중지 MCP)에 두 손가락 끝을 투영해서
+// 평소엔 중지가 +쪽, 꼬으면 끝이 서로 뒤집혀 -쪽이 된다. 뼈대 선분이 교차하는 것도 신호로 사용.
+function segHit(a, b, c, d) {
+  const cr = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  return cr(a, b, c) * cr(a, b, d) < 0 && cr(c, d, a) * cr(c, d, b) < 0;
+}
+function crossScore(lm) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const P = i => ({ x: lm[i].x * vw, y: lm[i].y * vh });
+  const hs = dist(P(0), P(9)) || 1;
+  const a = P(5), b = P(9), ll = dist(a, b) || 1;
+  const lx = (b.x - a.x) / ll, ly = (b.y - a.y) / ll;
+  const t8 = P(8), t12 = P(12);
+  const s = ((t12.x - t8.x) * lx + (t12.y - t8.y) * ly) / hs;   // 음수일수록 많이 꼬임
+  return { s, hit: segHit(P(6), P(8), P(10), P(12)) };
+}
+const CROSS_HOLD_MS = 280;   // 꼬임 판정이 잠깐 끊겨도 영역을 유지하는 시간
+const isCrossed = (st, now) => now - (st.crossAt || -1e9) < CROSS_HOLD_MS;
+
 const HOLD_MS = 180;   // 판정이 잠깐 흔들려도 이 시간 동안은 이전 상태 유지
 const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 위치에 이펙트 유지
 
@@ -172,7 +219,18 @@ function processHand(lm, st) {
   const wristS = toScreen(lm[0]), mcpS = toScreen(lm[9]);
   const handSize = dist(wristS, mcpS) || 1;
   const gap = dist(idx.raw, mid.raw);
-  const togetherRaw = idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
+
+  // 꼬임: 진입은 엄격하게, 유지는 느슨하게(히스테리시스). 약지·소지가 둘 다 펴져 있으면 제외
+  const cs = crossScore(lm);
+  st.crossScore = cs.s;
+  const enter = cs.s < -0.04 || (cs.hit && cs.s < 0.1);
+  const stay = cs.s < 0.04 || cs.hit;
+  const crossedRaw = idxExt && midExt && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
+  st.crossed = crossedRaw;
+  if (crossedRaw) st.crossAt = now;
+  const crossed = isCrossed(st, now);
+
+  const togetherRaw = !crossed && idxExt && midExt && gap < handSize * (st.merged ? 0.42 : 0.3);
   st.merged = togetherRaw;
   if (togetherRaw) st.togAt = now;
   const together = now - (st.togAt || -1e9) < HOLD_MS;
@@ -186,6 +244,7 @@ function processHand(lm, st) {
   st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
   st.size = handSize;
+  st.pts = lm.map(toScreen);   // 무량공처에서 손 마스크를 만들 때 사용
   st.seen = now;
 
   // ---- 발사 감지: 무라사키 상태에서 손을 휙 던지면 발사 ----
@@ -308,6 +367,7 @@ function stepBlasts(dt) {
 function render(t) {
   const dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0.016);
   lastT = t;
+  renderVoid(t, dt);
   ctx.clearRect(0, 0, W, H);
   ctx.save();
   if (shake > 0.5) { ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake); shake *= 0.86; }
@@ -319,9 +379,11 @@ function render(t) {
       if (st.vel && nowR - st.vel.t < 700 && nowR - (st.mergedAt || -1e9) < 900 && nowR > (st.cool || 0)
           && st.vel.speed > st.size * FLICK_SPEED * 0.7) launch(st);
       st.mergeT = st.redT = st.blueT = 0; st.idx = st.mid = null; st.seen = 0; st.wrist = null; st.hist = [];
+      st.pts = null; st.crossAt = 0; st.crossed = false;
       continue;
     }
     if (!st.idx) continue;
+    if (isCrossed(st, nowR)) { st.mergeT = st.redT = st.blueT = 0; continue; }  // 🤞 중엔 아카/아오 숨김
 
     const base = Math.max(14, st.size * 0.28);
     const pulse = 1 + Math.sin(t / 120) * 0.06;
@@ -364,6 +426,171 @@ function render(t) {
   stepBlasts(dt);
   ctx.restore();
 }
+
+// ================= 領域展開 無量空処 =================
+// 레이어: <video>(카메라) < #void(무량공처, 손 부분만 구멍) < #overlay(아카·아오·무라사키)
+const domain = { on: false, t: 0, age: 0, cx: 0, cy: 0, forced: false, vb: -1 };
+const introTimers = [];
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+const STARS = [];
+function spawnStar(init) {
+  return { a: Math.random() * Math.PI * 2, r: init ? Math.random() ** 2 : rnd(0.005, 0.05),
+    v: rnd(0.5, 1.6), hue: rnd(185, 290), white: Math.random() < 0.25 };
+}
+for (let i = 0; i < 340; i++) STARS.push(spawnStar(true));
+const NEBULA = [
+  { h: 255, x: .30, y: .35, r: .60, sp: 1.0 }, { h: 200, x: .72, y: .60, r: .55, sp: -0.8 },
+  { h: 285, x: .55, y: .25, r: .45, sp: 0.6 },  { h: 225, x: .25, y: .78, r: .50, sp: -1.2 },
+];
+
+function playIntro() {
+  introTimers.forEach(clearTimeout); introTimers.length = 0;
+  const txt = document.getElementById('domainText'), sub = document.getElementById('sub');
+  txt.classList.remove('show'); void txt.offsetWidth; txt.classList.add('show');
+  const say = (ko, jp) => { sub.innerHTML = `<small>${jp}</small>${ko}`; sub.classList.add('on'); };
+  say('영역 전개', '領域展開');
+  introTimers.push(setTimeout(() => say('무량공처', '無量空処'), 1300));
+  introTimers.push(setTimeout(() => sub.classList.remove('on'), 3500));
+}
+
+// 🤞 중인 손이 있는지 + 전개 중심(검지·중지 끝 중점)
+function domainWanted(now) {
+  if (domain.forced) return { on: true };
+  for (const st of states) {
+    if (st.seen && st.pts && now - st.seen < LOST_MS && isCrossed(st, now)) {
+      const a = st.pts[8], b = st.pts[12];
+      return { on: true, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+  }
+  return { on: false };
+}
+
+// 손 모양 경로(손바닥 + 손가락 뼈대). 현재 fillStyle/strokeStyle 로 칠한다.
+const FINGERS = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+const FINGER_W = [[.30, .25, .20], [.25, .22, .17], [.25, .22, .17], [.24, .21, .16], [.22, .19, .15]];
+function handShape(c, p, s) {
+  c.lineCap = c.lineJoin = 'round';
+  c.beginPath();
+  [0, 1, 5, 9, 13, 17].forEach((i, n) => n ? c.lineTo(p[i].x, p[i].y) : c.moveTo(p[i].x, p[i].y));
+  c.closePath(); c.fill();
+  c.lineWidth = s * 0.3; c.stroke();
+  FINGERS.forEach((f, fi) => {
+    for (let j = 0; j < 3; j++) {
+      c.lineWidth = s * FINGER_W[fi][j];
+      c.beginPath(); c.moveTo(p[f[j]].x, p[f[j]].y); c.lineTo(p[f[j + 1]].x, p[f[j + 1]].y); c.stroke();
+    }
+  });
+}
+// 손목 뒤로 이어지는 팔뚝 (끝으로 갈수록 투명)
+function forearmCut(c, p, s) {
+  const w = p[0], m = p[9], d = Math.hypot(w.x - m.x, w.y - m.y) || 1;
+  const ex = w.x + (w.x - m.x) / d * s * 1.1, ey = w.y + (w.y - m.y) / d * s * 1.1;
+  const g = c.createLinearGradient(w.x, w.y, ex, ey);
+  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  c.strokeStyle = g; c.lineCap = 'round'; c.lineWidth = s * 0.55;
+  c.beginPath(); c.moveTo(w.x, w.y); c.lineTo(ex, ey); c.stroke();
+}
+
+function drawVoidScene(t, dt, cx, cy) {
+  const c = vctx, D = Math.hypot(W, H) / 2 * 1.05, vx = W / 2, vy = H * 0.46;
+  // 배경
+  c.fillStyle = '#01010a'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighter';
+  // 성운
+  NEBULA.forEach((n, i) => {
+    const x = (n.x + Math.cos(t / 5000 * n.sp + i * 2) * 0.12) * W, y = (n.y + Math.sin(t / 6000 * n.sp + i) * 0.1) * H;
+    const r = n.r * Math.max(W, H);
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `hsla(${n.h},85%,48%,0.26)`); g.addColorStop(1, `hsla(${n.h},85%,40%,0)`);
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+  });
+  // 파동 링 (소실점에서 퍼져나감)
+  for (let k = 0; k < 4; k++) {
+    const u = (t / 2600 + k / 4) % 1, r = u ** 1.7 * D;
+    c.strokeStyle = `hsla(${200 + k * 25},90%,75%,${(1 - u) * 0.28 * Math.min(1, u * 5)})`;
+    c.lineWidth = 1 + u * 3;
+    c.beginPath(); c.arc(vx, vy, r, 0, Math.PI * 2); c.stroke();
+  }
+  // 워프 별빛: 정보가 쏟아져 들어오는 느낌
+  c.lineCap = 'round';
+  for (const s of STARS) {
+    s.r += (0.03 + s.r * 1.8) * s.v * dt * 0.9;
+    if (s.r > 1.05) Object.assign(s, spawnStar(false));
+    const tail = Math.max(0, s.r - (0.012 + s.r * 0.4) * s.v);
+    const ca = Math.cos(s.a), sa = Math.sin(s.a);
+    c.strokeStyle = s.white ? `rgba(255,255,255,${Math.min(1, s.r * 5)})` : `hsla(${s.hue},95%,72%,${Math.min(1, s.r * 5) * 0.9})`;
+    c.lineWidth = 0.6 + s.r * 2.6;
+    c.beginPath(); c.moveTo(vx + ca * tail * D, vy + sa * tail * D); c.lineTo(vx + ca * s.r * D, vy + sa * s.r * D); c.stroke();
+  }
+  // 소실점 코어
+  const pu = 1 + Math.sin(t / 380) * 0.08, cr = D * 0.16 * pu;
+  const cg = c.createRadialGradient(vx, vy, 0, vx, vy, cr);
+  cg.addColorStop(0, 'rgba(255,255,255,0.95)'); cg.addColorStop(0.25, 'rgba(160,215,255,0.55)');
+  cg.addColorStop(0.6, 'rgba(110,90,255,0.2)'); cg.addColorStop(1, 'rgba(80,60,255,0)');
+  c.fillStyle = cg; c.fillRect(vx - cr, vy - cr, cr * 2, cr * 2);
+  c.globalCompositeOperation = 'source-over';
+  // 비네트
+  const vg = c.createRadialGradient(vx, vy, D * 0.35, vx, vy, D);
+  vg.addColorStop(0, 'rgba(0,0,12,0)'); vg.addColorStop(1, 'rgba(0,0,12,0.72)');
+  c.fillStyle = vg; c.fillRect(0, 0, W, H);
+  // 전개 순간 섬광
+  const fl = Math.max(0, 1 - domain.age / 0.3);
+  if (fl > 0) { c.fillStyle = `rgba(210,235,255,${fl * 0.6})`; c.fillRect(0, 0, W, H); }
+}
+
+function renderVoid(t, dt) {
+  const now = performance.now(), want = domainWanted(now);
+  if (want.on && !domain.on) { domain.age = 0; if (domain.t <= 0.01) playIntro(); }
+  domain.on = want.on;
+  if (want.x !== undefined && (domain.t < 1 || !domain.cx)) { domain.cx = want.x; domain.cy = want.y; }
+  if (!domain.cx) { domain.cx = W / 2; domain.cy = H / 2; }
+  domain.age += dt;
+  domain.t = domain.on ? Math.min(1, domain.t + dt / 0.9) : Math.max(0, domain.t - dt / 0.45);
+
+  // 카메라 영상은 평소엔 살짝 어둡게, 전개 중엔 손이 또렷하게
+  const e = 1 - Math.pow(1 - domain.t, 3);
+  const vb = (0.7 + 0.3 * e).toFixed(2);
+  if (vb !== domain.vb) { domain.vb = vb; video.style.filter = `brightness(${vb})`; }
+
+  const c = vctx;
+  c.clearRect(0, 0, W, H);
+  if (domain.t <= 0) { domain.cx = 0; return; }   // 완전히 닫히면 다음 전개 때 새 중심을 잡는다
+
+  const { cx, cy } = domain;
+  const maxR = Math.max(Math.hypot(cx, cy), Math.hypot(W - cx, cy), Math.hypot(cx, H - cy), Math.hypot(W - cx, H - cy)) * 1.02;
+  const R = maxR * e;
+
+  c.save();
+  if (e < 1) { c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.clip(); }
+  drawVoidScene(t, dt, cx, cy);
+  c.restore();
+
+  // 전개 경계의 충격파 링
+  if (e < 1) {
+    c.save(); c.globalCompositeOperation = 'lighter';
+    c.strokeStyle = `rgba(190,230,255,${1 - e * e})`; c.lineWidth = 3 + (1 - e) * 16;
+    c.shadowColor = 'rgba(120,170,255,1)'; c.shadowBlur = 30 * dpr;
+    c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.stroke();
+    c.restore();
+  }
+
+  // 손만 남기기: 먼저 손 둘레에 은은한 빛, 그다음 손 모양을 뚫어서 아래의 카메라 영상이 보이게
+  const hands = states.filter(st => st.seen && st.pts && now - st.seen < LOST_MS);
+  c.save();
+  c.fillStyle = c.strokeStyle = 'rgba(190,225,255,1)';
+  c.shadowColor = 'rgba(110,190,255,0.9)'; c.shadowBlur = 38 * dpr;
+  hands.forEach(st => handShape(c, st.pts, st.size));
+  c.restore();
+  c.save();
+  c.globalCompositeOperation = 'destination-out';
+  c.fillStyle = c.strokeStyle = '#000';
+  c.shadowColor = '#000'; c.shadowBlur = 7 * dpr;
+  hands.forEach(st => { handShape(c, st.pts, st.size); forearmCut(c, st.pts, st.size); });
+  c.restore();
+}
+
+addEventListener('keydown', e => { if (e.key === 'v' || e.key === 'V') domain.forced = !domain.forced; });
 
 // 손 순서가 프레임마다 바뀌어도 가장 가까운 이전 손 상태에 이어 붙이기
 let fps = 0, fpsCount = 0, fpsT = performance.now();
@@ -445,7 +672,7 @@ function loop() {
       fpsCount++;
       const t = performance.now();
       if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
-      statusEl.textContent = (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
+      statusEl.textContent = (domain.on ? '領域展開 無量空処 · ' : '') + (list.length ? `손 ${list.length}개 인식됨` : '손을 카메라에 보여주세요') + ` · 인식 ${fps}fps`;
     } catch (e) { console.error(e); statusEl.textContent = '인식 오류: ' + e.message; }
   }
   requestAnimationFrame(loop);
