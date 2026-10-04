@@ -49,7 +49,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     두 손가락을 펴서 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+     (손가락을 <b>다 펴야</b> 발동!) 검지·중지를 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <p>검지·중지를 꼬으면(🤞) <b class="p">영역전개</b> — 손만 남기고 배경이 <b class="b">무량공처</b>로!<br>
      <span style="opacity:.6;font-size:13px">(손 인식 없이 효과만 보려면 V 키)</span></p>
   <button id="startBtn">카메라 켜기</button>
@@ -213,13 +213,25 @@ const CROSS_MAX_BETWEEN = 55;   // 두 손가락 사이 최대 각도(도)
 const CROSS_HOLD_MS = 280;   // 꼬임 판정이 잠깐 끊겨도 영역을 유지하는 시간
 const isCrossed = (st, now) => now - (st.crossAt || -1e9) < CROSS_HOLD_MS;
 
+// 엄지: 끝점이 새끼 MCP에서 IP보다 멀면 펴진 것 (접으면 손바닥 쪽으로 들어옴)
+function isThumbExtended(lm) {
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+  const d = (a, b) => Math.hypot((a.x - b.x) * vw, (a.y - b.y) * vh, (a.z - b.z) * vw);
+  return d(lm[4], lm[17]) > d(lm[3], lm[17]) * 1.08;
+}
+
+// 다섯 손가락을 모두 펴야 아카/아오/무라사키 발동
+function isOpenHand(lm) {
+  return isThumbExtended(lm) && isExtended(lm, 8, 6) && isExtended(lm, 12, 10)
+      && isExtended(lm, 16, 14) && isExtended(lm, 20, 18);
+}
+
 const HOLD_MS = 180;   // 판정이 잠깐 흔들려도 이 시간 동안은 이전 상태 유지
 const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 위치에 이펙트 유지
 
 function processHand(lm, st) {
   const now = performance.now();
-  if (isExtended(lm, 8, 6)) st.idxAt = now;
-  if (isExtended(lm, 12, 10)) st.midAt = now;
+  if (isOpenHand(lm)) { st.idxAt = now; st.midAt = now; }
   const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
   const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
@@ -235,7 +247,7 @@ function processHand(lm, st) {
   st.crossScore = cs.s;
   const enter = cs.parallel && (cs.s < -0.04 || (cs.hit && cs.s < 0.1));
   const stay = cs.parallel && (cs.s < 0.04 || cs.hit);
-  const crossedRaw = idxExt && midExt && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
+  const crossedRaw = isExtended(lm, 8, 6) && isExtended(lm, 12, 10) && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
   st.crossed = crossedRaw;
   if (crossedRaw) st.crossAt = now;
   const crossed = isCrossed(st, now);
