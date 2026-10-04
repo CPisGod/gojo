@@ -215,9 +215,14 @@ function crossScore(lm) {
   const di = dir(a, t8), dm = dir(b, t12), up = { x: ux, y: uy };
   const parallel = ang(di, up) < CROSS_MAX_DEV && ang(dm, up) < CROSS_MAX_DEV
     && ang(di, dm) < CROSS_MAX_BETWEEN && dist(t8, t12) < hs * 0.8;
-  return { s, parallel, hit: segHit(P(6), P(8), P(10), P(12)) };
+  // 중지가 검지를 '통과'했는지: 두 손가락의 PIP~끝 뼈대(관절 2마디씩)가 실제로 교차해야 한다
+  const idxLine = [P(6), P(7), P(8)], midLine = [P(10), P(11), P(12)];
+  let hit = false;
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) if (segHit(idxLine[i], idxLine[i + 1], midLine[j], midLine[j + 1])) hit = true;
+  return { s, parallel, hit };
 }
 const CROSS_MAX_DEV = 50;       // 각 손가락이 손 방향에서 벗어날 수 있는 최대 각도(도)
+const CROSS_MIN_SWAP = 0.12;    // 끝이 엇갈려야 하는 최소 폭 (손 크기 대비)
 const CROSS_MAX_BETWEEN = 55;   // 두 손가락 사이 최대 각도(도)
 const CROSS_HOLD_MS = 280;   // 꼬임 판정이 잠깐 끊겨도 영역을 유지하는 시간
 const isCrossed = (st, now) => now - (st.crossAt || -1e9) < CROSS_HOLD_MS;
@@ -276,8 +281,10 @@ function processHand(lm, st) {
   // 꼬임: 진입은 엄격하게, 유지는 느슨하게(히스테리시스). 약지·소지가 둘 다 펴져 있으면 제외
   const cs = crossScore(lm);
   st.crossScore = cs.s;
-  const enter = cs.parallel && (cs.s < -0.04 || (cs.hit && cs.s < 0.1));
-  const stay = cs.parallel && (cs.s < 0.04 || cs.hit);
+  // 진입: 뼈대가 교차하고 + 끝이 확실히 엇갈려야 한다 (어설프게 겹친 것·살짝 스친 것은 제외)
+  // 유지: 끝이 아직 엇갈려 있으면 유지 (랜드마크가 흔들려 교차 판정이 잠깐 끊겨도 버팀)
+  const enter = cs.parallel && cs.hit && cs.s < -CROSS_MIN_SWAP;
+  const stay = cs.parallel && cs.s < -CROSS_MIN_SWAP * 0.35;
   const crossedRaw = isExtended(lm, 8, 6) && isExtended(lm, 12, 10) && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
   st.crossed = crossedRaw;
   if (crossedRaw && !isCrossed(st, now)) st.crossSince = now;   // 꼬기 시작한 시각 (먼저 꼰 손 판별용)
