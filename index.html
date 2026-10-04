@@ -36,6 +36,13 @@
   #start b.r { color: #ff5b5b; } #start b.b { color: #5b9dff; } #start b.p { color: #c46bff; }
   button { font: inherit; font-size: 18px; padding: 12px 32px; border-radius: 999px; border: 0;
     background: linear-gradient(90deg, #ff4b4b, #8a4bff, #4b8bff); color: #fff; cursor: pointer; }
+  #debug { position: fixed; left: 12px; top: 12px; z-index: 3; pointer-events: none; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+    background: rgba(0,0,0,.55); padding: 8px 10px; border-radius: 8px; min-width: 190px; backdrop-filter: blur(4px); }
+  #debug .h { opacity: .6; margin-bottom: 2px; }
+  #debug .f { display: flex; gap: 4px; margin: 3px 0; }
+  #debug .f i { font-style: normal; padding: 1px 6px; border-radius: 4px; background: rgba(255,255,255,.12); opacity: .55; }
+  #debug .f i.on { background: #2fbf71; color: #00170a; opacity: 1; font-weight: 700; }
+  #debug .ok { color: #6df0a4; } #debug .no { color: #ff8a8a; } #debug .tag { color: #c9a8ff; font-weight: 700; }
   #status { position: fixed; left: 12px; bottom: 12px; z-index: 3; font-size: 13px; opacity: .7; }
 </style>
 </head>
@@ -45,6 +52,7 @@
 <canvas id="overlay"></canvas>
 <div id="domainText"><span class="a">領域展開</span><span class="b">無量空処</span></div>
 <div id="sub"></div>
+<div id="debug"></div>
 <div id="status"></div>
 <div id="start">
   <h1>無量空処</h1>
@@ -265,6 +273,10 @@ function processHand(lm, st) {
   st.mergeT = lerp(st.mergeT || 0, together ? 1 : 0, 0.18);
   st.redT = lerp(st.redT || 0, idxExt ? 1 : 0, 0.25);
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
+  st.dbg = {
+    ext: [isThumbExtended(lm), isExtended(lm, 8, 6), isExtended(lm, 12, 10), isExtended(lm, 16, 14), isExtended(lm, 20, 18)],
+    open: isOpenHand(lm), gap: gap / handSize, together, cs, crossed,
+  };
   st.size = handSize;
   st.pts = lm.map(toScreen);   // 무량공처에서 손 마스크를 만들 때 사용
   st.seen = now;
@@ -640,6 +652,31 @@ function assignHands(list) {
   }
 }
 
+
+// ---- 인식 상태 패널 (왼쪽 위, D 키로 켜기/끄기) ----
+const debugEl = document.getElementById('debug');
+let debugOn = true;
+addEventListener('keydown', e => { if (e.key === 'd' || e.key === 'D') { debugOn = !debugOn; debugEl.style.display = debugOn ? '' : 'none'; } });
+function updateDebug() {
+  if (!debugOn) return;
+  const now = performance.now(), NAMES = ['엄지', '검지', '중지', '약지', '소지'];
+  const yn = (v, a = 'O', b = 'X') => `<span class="${v ? 'ok' : 'no'}">${v ? a : b}</span>`;
+  const rows = [];
+  states.forEach((st, i) => {
+    if (!st.seen || !st.dbg || now - st.seen > LOST_MS) return;
+    const d = st.dbg, tags = [];
+    if (d.crossed) tags.push('🤞 꼬임');
+    else if (d.together) tags.push('붙임(茈)');
+    else if (d.open) tags.push('손 펴짐(赤蒼)');
+    rows.push(`<div class="h">손 ${i + 1} ${tags.length ? '· <span class="tag">' + tags.join(' ') + '</span>' : ''}</div>
+      <div class="f">${NAMES.map((n, k) => `<i class="${d.ext[k] ? 'on' : ''}">${n}</i>`).join('')}</div>
+      <div>꼬임값 ${d.cs.s.toFixed(2)} · 평행 ${yn(d.cs.parallel)} · 교차 ${yn(d.cs.hit)}</div>
+      <div>검지-중지 간격 ${d.gap.toFixed(2)}</div>`);
+  });
+  rows.push(`<div class="h">${domain.on ? '<span class="tag">領域展開 무량공처 ON</span>' : '무량공처 OFF'}${domain.forced ? ' (V 강제)' : ''}</div>`);
+  debugEl.innerHTML = rows.length > 1 ? rows.join('<hr style="border:0;border-top:1px solid #fff3;margin:6px 0">') : '<div class="h">손이 안 보여요</div>' + rows[0];
+}
+
 // ---- MediaPipe (Tasks Vision HandLandmarker) ----
 const TASKS = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
@@ -691,6 +728,7 @@ function loop() {
       const list = res.landmarks || [];
       // 화면 x 위치 순으로 정렬해서 손 상태가 뒤바뀌지 않게
       assignHands(list.slice(0, 2));
+      updateDebug();
       fpsCount++;
       const t = performance.now();
       if (t - fpsT > 1000) { fps = Math.round(fpsCount * 1000 / (t - fpsT)); fpsCount = 0; fpsT = t; }
