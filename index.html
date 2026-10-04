@@ -57,7 +57,7 @@
 <div id="start">
   <h1>無量空処</h1>
   <p>검지 위에 <b class="r">아카(赤)</b>, 중지 위에 <b class="b">아오(蒼)</b><br>
-     (손가락을 <b>다 펴야</b> 발동!) 검지·중지를 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
+     (검지나 중지 <b>하나만 펴도</b> 발동!) 두 손가락을 붙이면 <b class="p">무라사키(茈)</b><br>그 상태로 휙 던지면 발사 → 펑!</p>
   <p>검지·중지를 꼬으면(🤞) <b class="p">영역전개</b> — 손만 남기고 배경이 <b class="b">무량공처</b>로!<br>
      <span style="opacity:.6;font-size:13px">(손 인식 없이 효과만 보려면 V 키)</span></p>
   <button id="startBtn">카메라 켜기</button>
@@ -239,7 +239,8 @@ const LOST_MS = 450;   // 손이 안 잡혀도 이 시간 동안은 마지막 �
 
 function processHand(lm, st) {
   const now = performance.now();
-  if (isOpenHand(lm)) { st.idxAt = now; st.midAt = now; }
+  if (isExtended(lm, 8, 6)) st.idxAt = now;     // 검지만 펴져도 아카
+  if (isExtended(lm, 12, 10)) st.midAt = now;   // 중지만 펴져도 아오
   const idxExt = now - (st.idxAt || -1e9) < HOLD_MS;
   const midExt = now - (st.midAt || -1e9) < HOLD_MS;
   const idx = fingerTip(lm, 8, 6);
@@ -257,6 +258,7 @@ function processHand(lm, st) {
   const stay = cs.parallel && (cs.s < 0.04 || cs.hit);
   const crossedRaw = isExtended(lm, 8, 6) && isExtended(lm, 12, 10) && !(isExtended(lm, 16, 14) && isExtended(lm, 20, 18)) && (st.crossed ? stay : enter);
   st.crossed = crossedRaw;
+  if (crossedRaw && !isCrossed(st, now)) st.crossSince = now;   // 꼬기 시작한 시각 (먼저 꼰 손 판별용)
   if (crossedRaw) st.crossAt = now;
   const crossed = isCrossed(st, now);
 
@@ -275,7 +277,7 @@ function processHand(lm, st) {
   st.blueT = lerp(st.blueT || 0, midExt ? 1 : 0, 0.25);
   st.dbg = {
     ext: [isThumbExtended(lm), isExtended(lm, 8, 6), isExtended(lm, 12, 10), isExtended(lm, 16, 14), isExtended(lm, 20, 18)],
-    open: isOpenHand(lm), gap: gap / handSize, together, cs, crossed,
+    idx: idxExt, mid: midExt, gap: gap / handSize, together, cs, crossed,
   };
   st.size = handSize;
   st.pts = lm.map(toScreen);   // 무량공처에서 손 마스크를 만들 때 사용
@@ -463,7 +465,7 @@ function render(t) {
 
 // ================= 領域展開 無量空処 =================
 // 레이어: <video>(카메라) < #void(무량공처, 손 부분만 구멍) < #overlay(아카·아오·무라사키)
-const domain = { on: false, t: 0, age: 0, cx: 0, cy: 0, forced: false, vb: -1 };
+const domain = { on: false, owner: null, t: 0, age: 0, cx: 0, cy: 0, forced: false, vb: -1 };
 const introTimers = [];
 const rnd = (a, b) => a + Math.random() * (b - a);
 
@@ -489,15 +491,15 @@ function playIntro() {
 }
 
 // 🤞 중인 손이 있는지 + 전개 중심(검지·중지 끝 중점)
+// 두 손이 다 꼬여 있으면 먼저 꼰 손(crossSince가 작은 손)만 주인이 된다. 주인 손이 계속 꼬고 있는 동안은 바뀌지 않는다.
 function domainWanted(now) {
-  if (domain.forced) return { on: true };
-  for (const st of states) {
-    if (st.seen && st.pts && now - st.seen < LOST_MS && isCrossed(st, now)) {
-      const a = st.pts[8], b = st.pts[12];
-      return { on: true, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    }
-  }
-  return { on: false };
+  if (domain.forced) return { on: true, owner: null };
+  const live = st => st && st.seen && st.pts && now - st.seen < LOST_MS && isCrossed(st, now);
+  let owner = live(domain.owner) ? domain.owner : null;
+  if (!owner) for (const st of states) if (live(st) && (!owner || st.crossSince < owner.crossSince)) owner = st;
+  if (!owner) return { on: false };
+  const a = owner.pts[8], b = owner.pts[12];
+  return { on: true, owner, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
 }
 
 // 손 모양 경로(손바닥 + 손가락 뼈대). 현재 fillStyle/strokeStyle 로 칠한다.
@@ -577,6 +579,7 @@ function renderVoid(t, dt) {
   const now = performance.now(), want = domainWanted(now);
   if (want.on && !domain.on) { domain.age = 0; if (domain.t <= 0.01) playIntro(); }
   domain.on = want.on;
+  if (want.on) domain.owner = want.owner;
   if (want.x !== undefined && (domain.t < 1 || !domain.cx)) { domain.cx = want.x; domain.cy = want.y; }
   if (!domain.cx) { domain.cx = W / 2; domain.cy = H / 2; }
   domain.age += dt;
@@ -589,7 +592,7 @@ function renderVoid(t, dt) {
 
   const c = vctx;
   c.clearRect(0, 0, W, H);
-  if (domain.t <= 0) { domain.cx = 0; return; }   // 완전히 닫히면 다음 전개 때 새 중심을 잡는다
+  if (domain.t <= 0) { domain.cx = 0; domain.owner = null; return; }   // 완전히 닫히면 다음 전개 때 새 중심을 잡는다
 
   const { cx, cy } = domain;
   const maxR = Math.max(Math.hypot(cx, cy), Math.hypot(W - cx, cy), Math.hypot(cx, H - cy), Math.hypot(W - cx, H - cy)) * 1.02;
@@ -610,7 +613,8 @@ function renderVoid(t, dt) {
   }
 
   // 손만 남기기: 먼저 손 둘레에 은은한 빛, 그다음 손 모양을 뚫어서 아래의 카메라 영상이 보이게
-  const hands = states.filter(st => st.seen && st.pts && now - st.seen < LOST_MS);
+  // 꼬고 있는 주인 손만 남긴다 (V 강제 모드에선 보이는 손 전부)
+  const hands = (domain.owner ? [domain.owner] : states).filter(st => st.seen && st.pts && now - st.seen < LOST_MS);
   c.save();
   c.fillStyle = c.strokeStyle = 'rgba(190,225,255,1)';
   c.shadowColor = 'rgba(110,190,255,0.9)'; c.shadowBlur = 38 * dpr;
@@ -667,7 +671,7 @@ function updateDebug() {
     const d = st.dbg, tags = [];
     if (d.crossed) tags.push('🤞 꼬임');
     else if (d.together) tags.push('붙임(茈)');
-    else if (d.open) tags.push('손 펴짐(赤蒼)');
+    else { if (d.idx) tags.push('赤 아카'); if (d.mid) tags.push('蒼 아오'); }
     rows.push(`<div class="h">손 ${i + 1} ${tags.length ? '· <span class="tag">' + tags.join(' ') + '</span>' : ''}</div>
       <div class="f">${NAMES.map((n, k) => `<i class="${d.ext[k] ? 'on' : ''}">${n}</i>`).join('')}</div>
       <div>꼬임값 ${d.cs.s.toFixed(2)} · 평행 ${yn(d.cs.parallel)} · 교차 ${yn(d.cs.hit)}</div>
